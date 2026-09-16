@@ -10,7 +10,18 @@
 \*---------------------------------------------------------*/
 
 #include <cstring>
+#include <cstdint>
+#include <chrono>
 #include "AsusAuraMainboardController.h"
+
+#define AURA_MAINBOARD_MODE_ASSERT_WINDOW_MS   30000
+#define AURA_MAINBOARD_MODE_ASSERT_INTERVAL_MS 5000
+
+static uint64_t NowMs()
+{
+    return (uint64_t)(std::chrono::duration_cast<std::chrono::milliseconds>
+                     (std::chrono::steady_clock::now().time_since_epoch()).count());
+}
 
 AuraMainboardController::AuraMainboardController(hid_device* dev_handle, const char* path, std::string dev_name) : AuraUSBController(dev_handle, path, dev_name), mode(AURA_MODE_DIRECT)
 {
@@ -43,6 +54,9 @@ AuraMainboardController::AuraMainboardController(hid_device* dev_handle, const c
     }
 
     SetGen1();
+
+    mode_registered_ms    = NowMs();
+    last_mode_reassert_ms = 0;
 }
 
 AuraMainboardController::~AuraMainboardController()
@@ -75,6 +89,8 @@ void AuraMainboardController::SetGen1()
 
 void AuraMainboardController::SetChannelLEDs(unsigned char channel, RGBColor * colors, unsigned int num_colors)
 {
+    MaybeReassertMode();
+
     SendDirect
     (
         device_info[channel].direct_channel,
@@ -110,6 +126,7 @@ void AuraMainboardController::SetMode
     RGBColor color = ToRGBColor(red, grn, blu);
 
     SendEffect(device_info[channel].effect_channel, mode, shutdown_effect);
+    last_mode_reassert_ms = NowMs();
     if(mode == AURA_MODE_DIRECT)
     {
         return;
@@ -232,4 +249,41 @@ void AuraMainboardController::SendCommit()
     | Send packet                                           |
     \*-----------------------------------------------------*/
     hid_write(dev, usb_buf, 65);
+}
+
+void AuraMainboardController::MaybeReassertMode()
+{
+    /*-----------------------------------------------------*\
+    | Only re-arm Direct mode: it is a no-op, other modes   |
+    | could restart a running animation                     |
+    \*-----------------------------------------------------*/
+    if(mode != AURA_MODE_DIRECT)
+    {
+        return;
+    }
+
+    uint64_t now = NowMs();
+
+    /*------------------------------------------------------*\
+    | Only during the bounded window after (re-)registration |
+    \*------------------------------------------------------*/
+    if((now - mode_registered_ms) > AURA_MAINBOARD_MODE_ASSERT_WINDOW_MS)
+    {
+        return;
+    }
+
+    /*-----------------------------------------------------*\
+    | At most once every 5 s                                |
+    \*-----------------------------------------------------*/
+    if((now - last_mode_reassert_ms) < AURA_MAINBOARD_MODE_ASSERT_INTERVAL_MS)
+    {
+        return;
+    }
+
+    last_mode_reassert_ms = now;
+
+    for(std::size_t device_idx = 0; device_idx < device_info.size(); device_idx++)
+    {
+        SendEffect(device_info[device_idx].effect_channel, mode, false);
+    }
 }

@@ -60,6 +60,19 @@ public:
 private:
     unsigned int mode;
 
+    /*-----------------------------------------------------*\
+    | The device may silently drop the first effect-mode   |
+    | write right after USB (re-)enumeration, leaving the  |
+    | driver in "Direct" while the hardware plays its      |
+    | built-in effect. Re-assert Direct mode at a low rate |
+    | for a bounded window after registration so the       |
+    | device converges on the driver's state.              |
+    \*-----------------------------------------------------*/
+    void     MaybeReassertMode();
+
+    uint64_t mode_registered_ms;
+    uint64_t last_mode_reassert_ms;
+
     unsigned short GetMask(int start, int size);
 
     void SendEffect
